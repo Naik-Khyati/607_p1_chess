@@ -1,0 +1,172 @@
+---
+title: "Project 1: Chess Tournament"
+author: "Khyati Naik"
+date: "`r Sys.Date()`"
+---
+
+In this project, you’re given a text file with chess tournament results where the information has some structure. Your job is to create an R Markdown file that generates a .CSV file (that could for example be imported into a SQL database) with the following information for all of the players:  
+Player’s Name, Player’s State, Total Number of Points, Player’s Pre-Rating, and Average Pre Chess Rating of Opponents  
+  
+For the first player, the information would be:  
+Gary Hua, ON, 6.0, 1794, 1605  
+  
+1605 was calculated by using the pre-tournament opponents’ ratings of 1436, 1563, 1600, 1610, 1649, 1663, 1716, and dividing by the total number of games played.
+
+
+## Load packages
+
+```{r, message=FALSE}
+library(tidyverse)
+```
+
+
+## Read the data file from github
+
+```{r}
+#provide the github data path
+dt_path <- "https://raw.githubusercontent.com/Naik-Khyati/607_p1_chess/main/data/tournamentinfo.txt"
+
+# read the txt data file
+chess_raw_data <-  read.csv(dt_path, header = FALSE, sep = "|")
+
+head(chess_raw_data,12)
+```
+
+## Remove the first 4 rows from the dataframe as those are not required
+
+```{r}
+chess_dt <- chess_raw_data %>% slice(-1:-4)
+head(chess_dt)
+```
+
+## Remove rows with --- as they do not contain any data
+
+```{r}
+#delete rows with ----
+chess_dt <- chess_dt[!grepl("---", chess_dt[ ,1]), ]
+head(chess_dt)
+```
+
+## Check if column named V11 contains any information/data
+
+```{r}
+unique(chess_dt$V11)
+```
+
+## Since column V11 does not contan any data, remove it from the dataframe
+
+```{r}
+chess_dt <- chess_dt %>% select(-V11)
+head(chess_dt)
+```
+
+
+## Perform further data manipulations
+
+Essentially our data is stored in alternate rows. Hence, i will be saving records in even rows as a data frame and records in odd rows into another data frame.  
+  
+Also, I will only keep relevant columns in the data frame that i will require int he final data frame.
+
+```{r}
+chess_dt_odd <- chess_dt[seq(1, nrow(chess_dt), 2), ]
+
+#  select (V2,V3) %>% rename (name = V2, tot_pts = V3)
+chess_dt_even <- chess_dt[seq(2, nrow(chess_dt), 2), ] %>% select (V1,V2) %>% rename (state = V1, pre_rt =V2)
+```
+
+## Combine odd and even dataframes
+
+```{r}
+chess_dt_comb <- cbind(chess_dt_odd, chess_dt_even)
+head(chess_dt_comb)
+```
+
+## Data cleaning operations on multiple columns in the dataframe
+```{r}
+#split the pre rating column by character R:
+chess_dt_comb <- separate(chess_dt_comb, pre_rt, c("uscf_id", "rating" ), "R:")
+
+#cleaning the rating column further to keep only digits 
+chess_dt_comb$pre_rating <- str_extract(chess_dt_comb$rating, "\\d+\\d")
+
+# Convert pre_rating column to numeric
+chess_dt_comb$pre_rating <- as.numeric(chess_dt_comb$pre_rating)
+
+# Convert V3 column to numeric
+chess_dt_comb$V3 <- as.numeric(chess_dt_comb$V3)
+
+# Remove white space from column V1
+chess_dt_comb$V1 <- trimws(chess_dt_comb$V1)
+
+# Remove white space from column V2
+chess_dt_comb$V2 <-  trimws(chess_dt_comb$V2)
+
+# Remove white space from column state
+chess_dt_comb$state <-  trimws(chess_dt_comb$state)
+```
+
+
+## To get average opponent rating, first create a dataframe name opp_data in long form using gather function
+
+```{r}
+opp_data <- chess_dt_comb %>%
+  select(V1,V4:V10) %>%
+  gather(key='opp_nbr',value="opp_id",V4:V10) %>% arrange(V1)
+glimpse(opp_data)
+```
+
+## Perform further data manipulations on opponent id column
+
+```{r}
+# keep only numeric values in opp_id column
+opp_data$opp_id <- str_extract(opp_data$opp_id,"[0-9]+")
+```
+
+## Note that opponent id column have NAs in it
+
+```{r}
+opp_data %>%
+  select(V1,opp_id) %>% 
+  summarise_all(funs(sum(is.na(.))))
+```
+
+## Remove rows with na as opponent id
+
+```{r}
+opp_data <- opp_data %>% drop_na(opp_id)
+```
+
+## Check if there are no NAs in the opp_id column
+
+```{r}
+opp_data %>%
+  select(V1,opp_id) %>%  
+  summarise_all(funs(sum(is.na(.)))) 
+```
+
+
+## Perform further data manipulation on opp_data to fetch average pre rating for the opponents
+
+```{r}
+# Left join opp_data with chess_dt_comb to fetch the average pre rating for opponents
+opp_data <- opp_data %>%
+  left_join(chess_dt_comb, c("opp_id" = "V1")) %>% select (V1, pre_rating) %>%
+  group_by (V1) %>%
+  summarize(avg_opp_rating=  round(mean(pre_rating),0))
+
+glimpse(opp_data)
+```
+
+## Create a chess_dt_final dataframe by left join operation on chess_dt_comb with opp_data. Also rename columns V2 and V3 appropriately.
+
+```{r}
+chess_dt_final <- chess_dt_comb %>%
+  left_join(opp_data, c("V1" = "V1")) %>% select (V2, state, V3, pre_rating,avg_opp_rating) %>% rename(player_name = V2, tot_points = V3)
+head(chess_dt_final,100)
+```
+
+## Write the csv into the working directory. This csv can be loaded into database for further analysis.
+
+```{r}
+write.csv(chess_dt_final,"chess_tournmnt_clean_data.csv",row.names = FALSE)
+```
